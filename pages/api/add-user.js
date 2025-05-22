@@ -17,9 +17,18 @@ export default async function handler(req, res) {
     return res.status(405).json({ message: "Method not allowed, only POST requests are accepted" });
   }
 
-  const { name, email } = req.body;
+  // Log the received request for debugging
+  console.log('Request received:', { 
+    headers: req.headers,
+    method: req.method,
+    url: req.url,
+    body: req.body
+  });
+
+  const { name, email } = req.body || {};
   
   if (!name || !email) {
+    console.error('Missing required fields:', { name, email });
     return res.status(400).json({ message: "Name and email are required fields" });
   }
 
@@ -30,11 +39,23 @@ export default async function handler(req, res) {
     return res.status(500).json({ message: "Database configuration error: MONGODB_URI is not set" });
   }
 
+  // For testing - uncomment to bypass MongoDB for testing the API
+  // return res.status(200).json({ message: "Test successful - MongoDB connection bypassed", mockData: { name, email }});
+
   let client;
   try {
-    client = new MongoClient(uri);
+    // Logging MongoDB connection attempt
+    console.log('Attempting to connect to MongoDB with URI:', uri.substring(0, 20) + '...');
+    
+    // Use newer MongoDB connection options
+    client = new MongoClient(uri, {
+      // Modern driver doesn't need these options explicitly, but added for compatibility
+      connectTimeoutMS: 30000,
+      socketTimeoutMS: 45000,
+    });
+    
     await client.connect();
-    console.log('Connected to MongoDB');
+    console.log('Connected to MongoDB successfully');
     
     const db = client.db("studentsDB");
     const collection = db.collection("users");
@@ -46,22 +67,37 @@ export default async function handler(req, res) {
     });
     
     console.log(`User added with ID: ${result.insertedId}`);
-    res.status(200).json({ message: "User added successfully!", userId: result.insertedId });
+    return res.status(200).json({ message: "User added successfully!", userId: result.insertedId });
   } catch (error) {
     console.error('MongoDB Error:', error);
+    console.error('Error stack:', error.stack);
     let errorMessage = "Internal server error";
+    let details = {};
     
     if (error.name === 'MongoServerSelectionError') {
       errorMessage = "Could not connect to MongoDB. Please check your connection string and network.";
+      details.type = 'connection_error';
     } else if (error.code === 121) {
       errorMessage = "Document validation failed";
+      details.type = 'validation_error';
+    } else if (error.name === 'MongoParseError') {
+      errorMessage = "Invalid MongoDB connection string";
+      details.type = 'connection_string_error';
     }
     
-    res.status(500).json({ message: errorMessage, error: error.message });
+    return res.status(500).json({ 
+      message: errorMessage, 
+      error: error.message,
+      details: details
+    });
   } finally {
     if (client) {
-      await client.close();
-      console.log('MongoDB connection closed');
+      try {
+        await client.close();
+        console.log('MongoDB connection closed');
+      } catch (closeError) {
+        console.error('Error closing MongoDB connection:', closeError);
+      }
     }
   }
 };
